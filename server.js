@@ -1,4 +1,4 @@
-// Versione 1.0
+// Versione 1.1 - Correzione porta per Render
 // server.js
 
 const express = require('express');
@@ -6,8 +6,10 @@ const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 
 const app = express();
-// Definisci la porta su cui girerà il tuo server locale
-const port = 3000; 
+
+// CORREZIONE FONDAMENTALE: Usa la porta fornita da Render (process.env.PORT) 
+// o usa 3000 se stai eseguendo localmente.
+const port = process.env.PORT || 3000; 
 
 // Abilita CORS per permettere a frontend esterni di chiamare questa API
 app.use(cors());
@@ -33,13 +35,12 @@ db.serialize(() => {
 
 // --- Endpoint API ---
 
-// Endpoint di test sulla root. Prova a chiamare http://localhost:3000/
+// Endpoint di test sulla root. Prova a chiamare http://IL_TUO_URL/
 app.get('/', (req, res) => {
     res.send('API Node.js Funzionante! Vai a /api/utenti per i dati.');
 });
 
 // Endpoint per recuperare tutti gli utenti
-// Prova a chiamare http://localhost:3000/api/utenti
 app.get("/api/utenti", (req, res) => {
     const sql = "SELECT * FROM utenti";
     db.all(sql, [], (err, rows) => {
@@ -55,8 +56,8 @@ app.get("/api/utenti", (req, res) => {
 
 // --- Avvio Server ---
 app.listen(port, () => {
-    console.log(`3. Server Node.js in esecuzione su http://localhost:${port}`);
-    console.log(`Test API: http://localhost:${port}/api/utenti`);
+    console.log(`3. Server Node.js in esecuzione sulla porta: ${port}`);
+    console.log(`Test API: /api/utenti`);
 });
 
 // Importante: questa parte gestisce la chiusura del DB se premi Ctrl+C
