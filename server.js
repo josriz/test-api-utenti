@@ -1,97 +1,115 @@
-// Versione 1.2 - Aggiunta endpoint POST per inserimento utente
-// server.js
-
+// server.js - Backend Node.js con supporto PostgreSQL e CRUD
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
+const { Client } = require('pg');
 
 const app = express();
+const port = process.env.PORT || 3000;
 
-// CORREZIONE FONDAMENTALE: Usa la porta fornita da Render (process.env.PORT) 
-// o usa 3000 se stai eseguendo localmente.
-const port = process.env.PORT || 3000; 
-
-// MIDDLEWARE FONDAMENTALE: Permette a Express di leggere i dati JSON inviati dal frontend (req.body)
-app.use(express.json()); 
-
-// Abilita CORS per permettere a frontend esterni di chiamare questa API
+// Middleware
 app.use(cors());
+app.use(express.json()); // Permette di leggere JSON nel body delle richieste
 
-// --- Configurazione Database SQLite (Temporaneo in RAM) ---
-// Usa ":memory:" per un DB temporaneo veloce e che non richiede file
-const db = new sqlite3.Database(':memory:', (err) => {
-    if (err) {
-        return console.error("Errore connessione DB:", err.message);
-    }
-    console.log('1. Connesso al database SQLite in memoria.');
-});
+// Configurazione del client PostgreSQL
+let dbClient;
 
-// Eseguiamo le operazioni iniziali: crea la tabella e inserisce un dato di prova
-db.serialize(() => {
-    // Crea la tabella 'utenti' se non esiste
-    db.run("CREATE TABLE IF NOT EXISTS utenti (id INTEGER PRIMARY KEY, nome TEXT)");
-    
-    // Inserisce l'utente di prova 'Mario'
-    db.run("INSERT INTO utenti (nome) VALUES ('Mario')");
-    console.log('2. Tabella utenti creata e dato di prova inserito.');
-});
-
-// --- Endpoint API ---
-
-// Endpoint di test sulla root. Prova a chiamare http://IL_TUO_URL/
-app.get('/', (req, res) => {
-    res.send('API Node.js Funzionante! Vai a /api/utenti per i dati.');
-});
-
-// Endpoint per recuperare tutti gli utenti (GET)
-app.get("/api/utenti", (req, res) => {
-    const sql = "SELECT * FROM utenti";
-    db.all(sql, [], (err, rows) => {
-        if (err) {
-            res.status(500).json({ "error": err.message });
-            return;
-        }
-        // Restituisce i dati in formato JSON
-        res.json(rows);
-    });
-});
-
-// NUOVO ENDPOINT: Aggiunge un nuovo utente (POST)
-app.post('/api/utenti', (req, res) => {
-    // Estrae il nome dal corpo JSON inviato dal frontend
-    const { nome } = req.body;
-
-    if (!nome) {
-        // Se il campo 'nome' manca, restituisce un errore 400 Bad Request
-        return res.status(400).send({ error: "Il campo 'nome' è richiesto per l'inserimento." });
+try {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+        throw new Error("DATABASE_URL non configurata. Assicurati che il servizio Render sia collegato al database.");
     }
 
-    // Query per inserire il nuovo utente
-    db.run(`INSERT INTO utenti (nome) VALUES (?)`, [nome], function(err) {
-        if (err) {
-            console.error(err.message);
-            // Errore del database
-            return res.status(500).send({ error: 'Errore durante l\'inserimento nel database.' });
-        }
-        // Successo: restituisce l'oggetto inserito con status 201 Created
-        res.status(201).send({ id: this.lastID, nome }); 
+    dbClient = new Client({
+        connectionString: databaseUrl,
+        ssl: {
+            rejectUnauthorized: false, // Necessario per Render
+        },
     });
+
+    dbClient.connect()
+        .then(() => console.log('Connesso con successo a PostgreSQL su Render'))
+        .catch(err => console.error('Errore di connessione a PostgreSQL', err.stack));
+
+} catch (error) {
+    console.error("Errore fatale nella configurazione del database:", error.message);
+    // In un ambiente di produzione, qui si chiuderebbe l'applicazione.
+}
+
+// Funzione per inizializzare la tabella (crea la tabella se non esiste)
+async function initializeDb() {
+    try {
+        const createTableQuery = `
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `;
+        await dbClient.query(createTableQuery);
+        console.log('Tabella "users" verificata o creata con successo.');
+    } catch (err) {
+        console.error('Errore durante l\'inizializzazione del database:', err);
+    }
+}
+
+// Esegui l'inizializzazione del database all'avvio
+if (dbClient) {
+    initializeDb();
+}
+
+// Endpoint GET: Ottiene tutti gli utenti
+app.get('/utenti', async (req, res) => {
+    try {
+        const result = await dbClient.query('SELECT * FROM users ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Errore durante il recupero degli utenti:', err);
+        res.status(500).json({ error: 'Errore interno del server' });
+    }
 });
 
+// Endpoint POST: Aggiunge un nuovo utente
+app.post('/utenti', async (req, res) => {
+    const { name } = req.body;
+    if (!name) {
+        return res.status(400).json({ error: 'Il nome è obbligatorio' });
+    }
+    try {
+        const query = 'INSERT INTO users(name) VALUES($1) RETURNING *';
+        const result = await dbClient.query(query, [name]);
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        console.error('Errore durante l\'aggiunta dell\'utente:', err);
+        res.status(500).json({ error: 'Errore interno del server' });
+    }
+});
 
-// --- Avvio Server ---
+// NUOVO ENDPOINT DELETE: Rimuove un utente tramite ID
+app.delete('/utenti/:id', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID non valido' });
+    }
+    try {
+        const query = 'DELETE FROM users WHERE id = $1 RETURNING *';
+        const result = await dbClient.query(query, [id]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Utente non trovato' });
+        }
+        res.json({ message: 'Utente eliminato con successo', deletedUser: result.rows[0] });
+    } catch (err) {
+        console.error(`Errore durante l'eliminazione dell'utente con ID ${id}:`, err);
+        res.status(500).json({ error: 'Errore interno del server' });
+    }
+});
+
+// Endpoint di base per il controllo dello stato
+app.get('/', (req, res) => {
+    res.send('API Utenti Node.js in esecuzione.');
+});
+
+// Avvio del server
 app.listen(port, () => {
-    console.log(`3. Server Node.js in esecuzione sulla porta: ${port}`);
-    console.log(`Test API: /api/utenti`);
-});
-
-// Importante: questa parte gestisce la chiusura del DB se premi Ctrl+C
-process.on('SIGINT', () => {
-    db.close((err) => {
-        if (err) {
-            console.error(err.message);
-        }
-        console.log('4. Connessione al database SQLite chiusa. Uscita.');
-        process.exit(0);
-    });
+    console.log(`Server API in ascolto sulla porta ${port}`);
 });
